@@ -191,7 +191,8 @@ export default function CameraUI() {
     formData.append("file", file, "image.jpg");
 
     try {
-      const res = await axios.post<DetectionResult>("http://localhost:8000/detect", formData, {
+      //const res = await axios.post<DetectionResult>("http://localhost:8000/detect", formData, {
+      const res = await axios.post<DetectionResult>("https://your-railway-project.up.railway.app/detect", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       
