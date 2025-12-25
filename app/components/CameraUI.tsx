@@ -192,9 +192,14 @@ export default function CameraUI() {
 
     try {
       //const res = await axios.post<DetectionResult>("http://localhost:8000/detect", formData, {
-      const res = await axios.post<DetectionResult>("https://your-railway-project.up.railway.app/detect", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await axios.post<DetectionResult>(
+  "https://microplastic-screeningbackend.onrender.com/detect",
+  formData,
+  {
+    headers: { "Content-Type": "multipart/form-data" },
+  }
+);
+
       
       console.log("Backend response:", res.data);
       
