@@ -6,7 +6,7 @@ import axios from "axios";
 import { 
   Camera, Upload, X, RotateCw, AlertCircle, CheckCircle, 
   Ruler, Droplets, Download, History, Trash2, Save,
-  ChevronLeft, ChevronRight, Calendar, FileText
+  ChevronLeft, ChevronRight, Calendar, FileText, BarChart3
 } from "lucide-react";
 
 interface Detection {
@@ -37,6 +37,31 @@ interface DetectionResult {
   };
   timestamp?: string;
   imageData?: string; // Base64 image with detections
+  statistics?: {  // NEW: Add this field
+    average_size_µm: number;
+    median_size_µm: number;
+    min_size_µm: number;
+    max_size_µm: number;
+    std_size_µm: number;
+    total_area_µm2: number;
+    average_area_µm2: number;
+    median_area_µm2: number;
+    size_category_statistics?: {
+      [key: string]: {
+        count: number;
+        average_size_µm: number;
+        min_size_µm: number;
+        max_size_µm: number;
+        implication: string;
+      };
+    };
+    implications?: {
+      total_particles: string;
+      risk_assessment: string;
+      area_coverage: string;
+      concentration: string;
+    };
+  };
 }
 
 interface HistoryItem {
@@ -191,21 +216,19 @@ export default function CameraUI() {
     formData.append("file", file, "image.jpg");
 
     try {
-      //const res = await axios.post<DetectionResult>("http://localhost:8000/detect", formData, {
       const res = await axios.post<DetectionResult>(
-  "https://microplastic-screeningbackend.onrender.com/detect",
-  formData,
-  {
-    headers: { "Content-Type": "multipart/form-data" },
-  }
-);
+        "https://microplastic-screeningbackend.onrender.com/detect",
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+        }
+      );
 
-      
       console.log("Backend response:", res.data);
-      
+
       const processedResult: DetectionResult = {
         count: res.data.count || 0,
-        detections: Array.isArray(res.data.detections) 
+        detections: Array.isArray(res.data.detections)
           ? res.data.detections.map((d: any) => ({
               confidence: Number(d.confidence) || 0,
               bbox: Array.isArray(d.bbox) ? d.bbox.map(Number) : [0, 0, 0, 0],
@@ -227,17 +250,17 @@ export default function CameraUI() {
         },
         calibration_info: res.data.calibration_info,
         timestamp: new Date().toISOString(),
+        statistics: res.data.statistics || undefined, // NEW: Include statistics
       };
-      
+
       setResult(processedResult);
-      
+
       // Save to history after a brief delay to ensure image is loaded
       setTimeout(() => {
         if (image) {
           saveToHistory(processedResult, image, `detection_${Date.now()}.jpg`);
         }
       }, 500);
-      
     } catch (err) {
       console.error("Detection failed:", err);
       alert("Detection failed. Please try again.");
@@ -279,7 +302,47 @@ export default function CameraUI() {
   const downloadResults = () => {
     if (!result || !image) return;
 
-    // Create CSV data
+    // Prepare statistics rows for CSV
+    const statsRows = [];
+    if (result.statistics) {
+      statsRows.push(['']);
+      statsRows.push(['Detailed Statistics']);
+      statsRows.push(['Average Size (µm):', result.statistics.average_size_µm.toFixed(2)]);
+      statsRows.push(['Median Size (µm):', result.statistics.median_size_µm.toFixed(2)]);
+      statsRows.push(['Min Size (µm):', result.statistics.min_size_µm.toFixed(2)]);
+      statsRows.push(['Max Size (µm):', result.statistics.max_size_µm.toFixed(2)]);
+      statsRows.push(['Std Dev (µm):', result.statistics.std_size_µm.toFixed(2)]);
+      statsRows.push(['Total Area (µm²):', result.statistics.total_area_µm2.toFixed(2)]);
+      statsRows.push(['Total Area (mm²):', (result.statistics.total_area_µm2 / 1e6).toFixed(6)]);
+      statsRows.push(['Average Area (µm²):', result.statistics.average_area_µm2.toFixed(2)]);
+      statsRows.push(['Median Area (µm²):', result.statistics.median_area_µm2.toFixed(2)]);
+      
+      if (result.statistics.size_category_statistics) {
+        statsRows.push(['']);
+        statsRows.push(['Size Category Statistics']);
+        statsRows.push(['Category', 'Count', 'Avg Size (µm)', 'Min Size (µm)', 'Max Size (µm)', 'Implication']);
+        Object.entries(result.statistics.size_category_statistics).forEach(([category, stats]) => {
+          statsRows.push([
+            category,
+            stats.count,
+            stats.average_size_µm.toFixed(2),
+            stats.min_size_µm.toFixed(2),
+            stats.max_size_µm.toFixed(2),
+            stats.implication
+          ]);
+        });
+      }
+      
+      if (result.statistics.implications) {
+        statsRows.push(['']);
+        statsRows.push(['Risk Implications']);
+        Object.entries(result.statistics.implications).forEach(([key, value]) => {
+          statsRows.push([key.replace('_', ' '), value]);
+        });
+      }
+    }
+
+    // Create CSV data with statistics
     const csvContent = [
       ['Microplastic Detection Results'],
       [`Date: ${new Date().toLocaleString()}`],
@@ -310,6 +373,7 @@ export default function CameraUI() {
       ['Calibration Info'],
       ['Microns per pixel:', result.calibration_info?.microns_per_pixel.toFixed(2) || 'N/A'],
       ['Field of View:', `${result.calibration_info?.field_of_view_µm[0].toFixed(0)} × ${result.calibration_info?.field_of_view_µm[1].toFixed(0)} µm`],
+      ...statsRows, // Include the statistics rows
     ].map(row => row.join(',')).join('\n');
 
     // Create blob and download
@@ -335,10 +399,35 @@ export default function CameraUI() {
   const downloadReportPDF = () => {
     if (!result || !image) return;
 
-    // Create a printable report
-    const reportWindow = window.open('', '_blank');
-    if (!reportWindow) return;
+    // Prepare statistics HTML
+    let statisticsHTML = '';
+    if (result.statistics) {
+      statisticsHTML = `
+        <div class="section">
+          <div class="section-title">Detailed Statistics</div>
+          <table>
+            <tr><td>Average Size:</td><td><strong>${result.statistics.average_size_µm.toFixed(2)} µm</strong></td></tr>
+            <tr><td>Median Size:</td><td><strong>${result.statistics.median_size_µm.toFixed(2)} µm</strong></td></tr>
+            <tr><td>Size Range:</td><td><strong>${result.statistics.min_size_µm.toFixed(2)} - ${result.statistics.max_size_µm.toFixed(2)} µm</strong></td></tr>
+            <tr><td>Total Area:</td><td><strong>${(result.statistics.total_area_µm2 / 1e6).toFixed(6)} mm² (${result.statistics.total_area_µm2.toFixed(2)} µm²)</strong></td></tr>
+          </table>
+      `;
+      
+      if (result.statistics.implications) {
+        statisticsHTML += `
+          <div style="margin-top: 15px; padding: 10px; background-color: #fee; border-left: 4px solid #f00;">
+            <div style="font-weight: bold; color: #c00;">Risk Assessment: ${result.statistics.implications.risk_assessment}</div>
+            <div style="margin-top: 5px; font-size: 14px;">${result.statistics.implications.total_particles}</div>
+            <div style="font-size: 14px;">${result.statistics.implications.area_coverage}</div>
+            <div style="font-size: 14px;">${result.statistics.implications.concentration}</div>
+          </div>
+        `;
+      }
+      
+      statisticsHTML += `</div>`;
+    }
 
+    // Create a printable report
     const reportHTML = `
       <!DOCTYPE html>
       <html>
@@ -361,6 +450,7 @@ export default function CameraUI() {
           .timestamp { color: #666; font-size: 14px; margin-top: 30px; }
           .image-container { text-align: center; margin: 20px 0; }
           .image-container img { max-width: 100%; max-height: 500px; border: 1px solid #ddd; }
+          .risk-assessment { background-color: #fee; padding: 15px; border-left: 4px solid #f00; margin: 15px 0; }
         </style>
       </head>
       <body>
@@ -395,6 +485,8 @@ export default function CameraUI() {
           </div>
           <p><strong>Total Particles Detected:</strong> ${result.count}</p>
         </div>
+
+        ${statisticsHTML}
 
         <div class="section">
           <div class="section-title">Detection Details</div>
@@ -444,6 +536,9 @@ export default function CameraUI() {
       </body>
       </html>
     `;
+
+    const reportWindow = window.open('', '_blank');
+    if (!reportWindow) return;
 
     reportWindow.document.write(reportHTML);
     reportWindow.document.close();
@@ -1012,6 +1107,105 @@ export default function CameraUI() {
                   </div>
                 )}
               </div>
+
+              {/* Statistics Section - Added after Calibration Info */}
+              {result?.statistics && (
+                <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+                  <h3 className="font-semibold mb-3 flex items-center">
+                    <BarChart3 className="mr-2 text-green-500" size={20} />
+                    Detailed Statistics
+                  </h3>
+                  
+                  {/* Size Statistics Grid */}
+                  <div className="mb-4">
+                    <h4 className="text-sm font-medium text-gray-300 mb-2">Size Analysis</h4>
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="bg-gray-800/50 p-3 rounded-lg">
+                        <div className="text-xs text-gray-400">Average Size</div>
+                        <div className="font-bold text-lg">{result.statistics.average_size_µm.toFixed(1)} µm</div>
+                      </div>
+                      <div className="bg-gray-800/50 p-3 rounded-lg">
+                        <div className="text-xs text-gray-400">Median Size</div>
+                        <div className="font-bold text-lg">{result.statistics.median_size_µm.toFixed(1)} µm</div>
+                      </div>
+                      <div className="bg-gray-800/50 p-3 rounded-lg">
+                        <div className="text-xs text-gray-400">Min Size</div>
+                        <div className="font-bold text-lg">{result.statistics.min_size_µm.toFixed(1)} µm</div>
+                      </div>
+                      <div className="bg-gray-800/50 p-3 rounded-lg">
+                        <div className="text-xs text-gray-400">Max Size</div>
+                        <div className="font-bold text-lg">{result.statistics.max_size_µm.toFixed(1)} µm</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Area Statistics */}
+                  <div className="mb-4">
+                    <h4 className="text-sm font-medium text-gray-300 mb-2">Area Analysis</h4>
+                    <div className="bg-gray-800/50 p-3 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="text-xs text-gray-400">Total Area Coverage</div>
+                          <div className="font-bold text-lg">
+                            {(result.statistics.total_area_µm2 / 1e6).toFixed(4)} mm²
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {result.statistics.total_area_µm2.toFixed(2)} µm²
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-400">Avg. Particle Area</div>
+                          <div className="font-bold text-lg">
+                            {(result.statistics.average_area_µm2 / 1e6).toFixed(6)} mm²
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Size Category Specific Stats */}
+                  {result.statistics.size_category_statistics && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-medium text-gray-300 mb-2">Size Category Details</h4>
+                      <div className="space-y-2">
+                        {Object.entries(result.statistics.size_category_statistics).map(([category, stats]) => (
+                          <div key={category} className="bg-gray-800/30 p-3 rounded-lg">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className={`text-sm font-medium capitalize ${sizeCategoryColors[category]?.split(' ').find(c => c.includes('text-')) || 'text-gray-300'}`}>
+                                {category}
+                              </span>
+                              <span className="text-sm font-bold">{stats.count} particles</span>
+                            </div>
+                            <div className="text-xs text-gray-400 mb-1">
+                              Avg: {stats.average_size_µm.toFixed(1)} µm | Range: {stats.min_size_µm.toFixed(1)}-{stats.max_size_µm.toFixed(1)} µm
+                            </div>
+                            <div className="text-xs text-gray-300 italic">
+                              {stats.implication}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Risk Implications */}
+                  {result.statistics.implications && (
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-300 mb-2">Risk Assessment</h4>
+                      <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-lg">
+                        <div className="text-sm font-medium text-red-400 mb-1">
+                          {result.statistics.implications.risk_assessment}
+                        </div>
+                        <div className="text-xs text-gray-300 space-y-1">
+                          <div>{result.statistics.implications.total_particles}</div>
+                          <div>{result.statistics.implications.area_coverage}</div>
+                          <div>{result.statistics.implications.concentration}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Calibration Info */}
               {result?.calibration_info && (
